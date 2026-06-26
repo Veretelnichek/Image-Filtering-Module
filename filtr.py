@@ -29,3 +29,37 @@ def median_filtrs(source_name, f):
 
     # Сохраняем результат
     Image.fromarray(img.astype('uint8')).save("median_filtrs.jpg", "JPEG")
+
+def filter_matrixSvertki(source_name, result_name, div):
+    img = np.array(Image.open(source_name))
+    h, w, c = img.shape
+    out = np.zeros_like(img, dtype=np.float64)
+    out[:] = img
+    out[:, -1, :] = 0
+    out[-1, :, :] = 0
+
+    kernel = np.array([[0.5, 0.75, 0.5],
+                       [0.75, 1.0, 0.75],
+                       [0.5, 0.75, 0.5]], dtype=np.float64)
+
+    rows = slice(2, w - 1)
+    cols = slice(2, h - 1)
+
+    for ch in range(c):
+        center = img[rows, cols, ch]
+        top_left = img[rows - 1, cols - 1, ch]
+        top_mid = img[rows - 1, cols, ch]
+        top_right = img[rows - 1, cols + 1, ch]
+        mid_left = img[rows, cols - 1, ch]
+        mid_right = img[rows, cols + 1, ch]
+        bottom_left = img[rows + 1, cols - 1, ch]
+        bottom_mid = img[rows + 1, cols, ch]
+        bottom_right = img[rows + 1, cols + 1, ch]
+
+        conv = (top_left * 0.5 + top_mid * 0.75 + top_right * 0.5 +
+                mid_left * 0.75 + center * 1.0 + mid_right * 0.75 +
+                bottom_left * 0.5 + bottom_mid * 0.75 + bottom_right * 0.5) / div
+
+        out[rows, cols, ch] = np.clip(conv, 0, 255).astype(np.uint8)
+
+    Image.fromarray(out.astype('uint8')).save(result_name, "JPEG")
