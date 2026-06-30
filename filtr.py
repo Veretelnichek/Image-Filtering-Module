@@ -1,5 +1,6 @@
 import numpy as np
 from PIL import Image
+from numpy.lib.stride_tricks import sliding_window_view
 
 def median_filtrs(source_name, f):
     # Загружаем изображение в массив NumPy (высота, ширина, каналы)
@@ -119,4 +120,86 @@ def filter_Kuwahara(source_name, result_name):
         # Записываем в out по срезам rows, cols, ch
         out[rows, cols, ch] = selected.reshape(n_rows, n_cols)
 
+    Image.fromarray(out.astype('uint8')).save(result_name, "JPEG")
+
+def filter_Kuan(source_name, result_name, ch_vib):
+    # Загрузка изображения
+    img = np.array(Image.open(source_name)).astype(np.float64)
+    h, w, c = img.shape
+
+    # Выходное изображение – копия оригинала
+    out = img.copy()
+
+    # Если изображение слишком мало, фильтр не применяется
+    if h < 7 or w < 7:
+        Image.fromarray(out.astype('uint8')).save(result_name, "JPEG")
+        return
+
+    # Глобальные дисперсии для каждого канала
+    disp_obsh = np.var(img, axis=(0, 1))  # массив (c,)
+
+    # Внутренняя область (центры окон 7x7, исключая 4 пикселя по краям)
+    rows = slice(4, h - 3)   # индексы 4..h-4 включительно
+    cols = slice(4, w - 3)   # индексы 4..w-4 включительно
+    n_rows = h - 7
+    n_cols = w - 7
+
+    # Параметр CU (скаляр для каждого канала, но зависит от ch_vib и дисперсии)
+    # В исходном коде: CU = 1 / sqrt(ch_vib) * dispObsh
+    # Если CU == 0, то CU = 1 (но это маловероятно)
+    sqrt_ch = np.sqrt(ch_vib)
+    CU = (1.0 / sqrt_ch) * disp_obsh
+    CU = np.where(CU == 0, 1.0, CU)   # защита от деления на ноль
+
+    # Обработка каждого канала
+    for ch in range(c):
+        # Исходный канал
+        img_ch = img[:, :, ch]
+
+        # Скользящие окна 7x7
+        windows = sliding_window_view(img_ch, (7, 7))  # форма (h-6, w-6, 7, 7)
+
+        # Локальное среднее и дисперсия для всех окон
+        mean_all = np.mean(windows, axis=(2, 3))      # (h-6, w-6)
+        var_all = np.var(windows, axis=(2, 3))        # (h-6, w-6)
+
+        # Берём только окна, соответствующие внутренним центрам
+        # Индексы окон: r = центр - 3, центр от 4 до h-4 => r от 1 до h-7 = (h-6)-1
+        # slice(1, h-6) даст индексы 1..h-7, что соответствует центрам 4..h-4
+        mean_loc = mean_all[1:h-6, 1:w-6]   # (n_rows, n_cols)
+        var_loc = var_all[1:h-6, 1:w-6]     # (n_rows, n_cols)
+
+        # Значения пикселей в центрах
+        PC = img[rows, cols, ch]            # (n_rows, n_cols)
+
+        # Локальное среднее и дисперсия
+        LM = mean_loc
+        LV = var_loc
+
+        # Защита от деления на ноль
+        PC = np.where(PC == 0, 1.0, PC)
+        LM = np.where(LM == 0, 1.0, LM)
+        LV = np.where(LV == 0, 1.0, LV)
+
+        # Вычисление CI = sqrt(LV) / LM * disp_obsh[ch]
+        # В исходном коде: CI = math.sqrt(LV) / LM * dispObsh (без скобок)
+        CI = (np.sqrt(LV) / LM) * disp_obsh[ch]
+        CI = np.where(CI == 0, 1.0, CI)
+
+        # Коэффициент K
+        # CU – скаляр для канала, поэтому используем его как число
+        cu2 = CU[ch] * CU[ch]
+        # ci2 = CI^2
+        ci2 = CI * CI
+        K = (1 - (cu2 / ci2)) / (1 + cu2)
+        K = np.where(K == 0, 1.0, K)
+
+        # Результирующее значение
+        R = PC * K + LM * (1 - K)
+        R = np.where(R == 0, 1.0, R)
+
+        # Обрезка и запись в выходной массив
+        out[rows, cols, ch] = np.clip(R, 0, 255)
+
+    # Сохранение результата
     Image.fromarray(out.astype('uint8')).save(result_name, "JPEG")
